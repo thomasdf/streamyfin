@@ -194,7 +194,14 @@ export const DownloadItems: React.FC<DownloadProps> = ({
           "DownloadItem ~ initiateDownload: No api or user or item",
         );
       }
-      const downloadDetailsPromises = items.map(async (item) => {
+      // Process items strictly one at a time. `getDownloadUrl` opens a live
+      // transcode session on the Jellyfin server (getPlaybackInfo with
+      // autoOpenLiveStream:true spins up an ffmpeg process), so fanning these
+      // out with Promise.all spawns N concurrent server transcodes at once for
+      // a season download — which saturates the server and crashes the app.
+      // The native downloader already serializes the byte pull to one at a
+      // time, so opening one session at a time here costs nothing.
+      for (const item of items) {
         const { mediaSource, audioIndex, subtitleIndex } =
           itemsNotDownloaded.length > 1
             ? getDefaultPlaySettings(item, settings!)
@@ -216,15 +223,9 @@ export const DownloadItems: React.FC<DownloadProps> = ({
           audioMode: settings?.audioTranscodeMode,
         });
 
-        return {
-          url: downloadDetails?.url,
-          item,
-          mediaSource: downloadDetails?.mediaSource,
-        };
-      });
+        const url = downloadDetails?.url;
+        const downloadMediaSource = downloadDetails?.mediaSource;
 
-      const downloadDetails = await Promise.all(downloadDetailsPromises);
-      for (const { url, item, mediaSource } of downloadDetails) {
         if (!url) {
           Alert.alert(
             t("home.downloads.something_went_wrong"),
@@ -232,7 +233,7 @@ export const DownloadItems: React.FC<DownloadProps> = ({
           );
           continue;
         }
-        if (!mediaSource) {
+        if (!downloadMediaSource) {
           console.error(`Could not get download URL for ${item.Name}`);
           toast.error(
             t("home.downloads.toasts.could_not_get_download_url_for_item", {
@@ -241,23 +242,14 @@ export const DownloadItems: React.FC<DownloadProps> = ({
           );
           continue;
         }
-        // Get the audio/subtitle indices that were used for this download
-        const downloadAudioIndex =
-          itemsNotDownloaded.length > 1
-            ? getDefaultPlaySettings(item, settings!).audioIndex
-            : selectedOptions?.audioIndex;
-        const downloadSubtitleIndex =
-          itemsNotDownloaded.length > 1
-            ? getDefaultPlaySettings(item, settings!).subtitleIndex
-            : selectedOptions?.subtitleIndex;
 
         await startBackgroundDownload(
           url,
           item,
-          mediaSource,
+          downloadMediaSource,
           selectedOptions?.bitrate || defaultBitrate,
-          downloadAudioIndex,
-          downloadSubtitleIndex,
+          audioIndex,
+          subtitleIndex,
         );
       }
     },
